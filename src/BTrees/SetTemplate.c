@@ -369,22 +369,13 @@ Set_init(PyObject *self, PyObject *args, PyObject *kwds)
 static PyObject *
 set_repr(Bucket *self)
 {
-    static PyObject *format;
-    PyObject *r, *t;
+    PyObject *r, *keys;
 
-    if (!format)
-        format = PyUnicode_FromString(MOD_NAME_PREFIX "Set(%s)");
-    UNLESS (t = PyTuple_New(1))
+    UNLESS (keys = bucket_keys(self, NULL, NULL))
         return NULL;
-    UNLESS (r = bucket_keys(self, NULL, NULL))
-        goto err;
-    PyTuple_SET_ITEM(t, 0, r);
-    r = t;
-    ASSIGN(r, PyUnicode_Format(format, r));
+    r = PyUnicode_FromFormat(MOD_NAME_PREFIX "Set(%S)", keys);
+    Py_DECREF(keys);
     return r;
-err:
-    Py_DECREF(t);
-    return NULL;
 }
 
 static Py_ssize_t

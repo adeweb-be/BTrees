@@ -4,6 +4,11 @@ Change log
 6.6 (unreleased)
 ----------------
 
+- Declare free-threading support in the C extensions, so that importing them
+  on CPython 3.14t no longer enables the GIL. The ``Set`` ``repr`` no longer
+  uses a lazily created format string, and the internal items and iterator
+  types are now readied at module init.
+
 
 6.5 (2026-08-20)
 ----------------

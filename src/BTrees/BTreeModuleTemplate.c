@@ -710,6 +710,10 @@ module_init(void)
     _SET_TYPE(BTreeItemsType);
     _SET_TYPE(BTreeIter_Type);
     BTreeIter_Type.tp_getattro = PyObject_GenericGetAttr;
+    if (PyType_Ready(&BTreeItemsType) < 0)
+        return NULL;
+    if (PyType_Ready(&BTreeIter_Type) < 0)
+        return NULL;
     BucketType.tp_new = PyType_GenericNew;
     SetType.tp_new = PyType_GenericNew;
     BTreeType.tp_new = PyType_GenericNew;
@@ -735,6 +739,12 @@ module_init(void)
 
     /* Create the module and add the functions */
     module = PyModule_Create(&moduledef);
+    if (module == NULL)
+        return NULL;
+#ifdef Py_GIL_DISABLED
+    /* This module can run without the GIL. */
+    PyUnstable_Module_SetGIL(module, Py_MOD_GIL_NOT_USED);
+#endif
 
     /* Add some symbolic constants to the module */
     mod_dict = PyModule_GetDict(module);
