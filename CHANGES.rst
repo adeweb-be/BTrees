@@ -1,6 +1,18 @@
 Change log
 ==========
 
+6.5+zoe.2 (unreleased)
+----------------------
+
+- A delete raises ``RuntimeError`` if a key comparison or the child changes
+  the BTree node that holds the separator, for example with
+  ``_p_invalidate()``. Before, the update of the separator wrote into the
+  freed array of the node.
+
+- Add the delete of a separator key to the stress test, and a test that
+  runs it with freed memory poisoned.
+
+
 6.5+zoe.1 (unreleased)
 ----------------------
 
