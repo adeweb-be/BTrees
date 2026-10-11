@@ -5,14 +5,19 @@ ghostifies the nodes through its own data manager, and resolves conflicts.
 On a free-threaded build without the GIL, the threads run in parallel.
 
 A comparison of object keys runs Python code. In some steps, that code
-invalidates the buckets of the tree while a search reads one of them.
-The search must then raise RuntimeError or give the correct result.
+invalidates the buckets of the tree while a search reads one of them, or
+invalidates the root while a delete compares a key with a separator of
+the root. The operation must then raise RuntimeError or give the correct
+result.
 
-Set BTREES_STRESS_ROUNDS to run more rounds.
+Set BTREES_STRESS_ROUNDS to run more rounds. To make a write into freed
+memory crash, run with MALLOC_PERTURB_=165 and
+GLIBC_TUNABLES=glibc.malloc.tcache_count=0.
 """
 import importlib
 import os
 import random
+import subprocess
 import sys
 import threading
 import unittest
@@ -45,6 +50,11 @@ class Key:
             _local.countdown = countdown - 1
             if countdown == 1:
                 _local.hook()
+        target = getattr(_local, 'target', None)
+        if target is not None and other is target:
+            # Run the hook in the comparison with the target key.
+            _local.target = None
+            _local.hook()
         return self.v < other.v
 
     def __eq__(self, other):
@@ -246,6 +256,34 @@ class Worker:
             _local.countdown = 0
             _local.hook = None
 
+    def reenter_delete(self, tree, ref):
+        """Delete a separator key of the root.
+
+        The comparison of the key with the separator invalidates the root.
+        """
+        state = tree.__getstate__()
+        if state is None or len(state) == 1:
+            return
+        target = self.rng.choice(state[0][1::2])
+
+        def hook():
+            tree._p_invalidate()
+
+        _local.hook = hook
+        _local.target = target
+        try:
+            del tree[Key(target.v)]
+        except RuntimeError:
+            self.reentrant += 1
+        except KeyError:
+            pass
+        finally:
+            _local.target = None
+            _local.hook = None
+        # The child can delete the key before the error.
+        if Key(target.v) not in tree:
+            ref.pop(target.v, None)
+
     def resolve(self):
         m = self.module
         base_keys = self.rng.sample(range(KEYSPACE), 20)
@@ -334,7 +372,35 @@ class Worker:
             if self.is_c and self.prefix[0] == 'O':
                 self.reenter(jar, tree, ref)
                 self.check(tree, ref, treeset, refset)
+                self.reenter_delete(tree, ref)
+                self.check(tree, ref, treeset, refset)
             self.resolve()
+
+
+_DELETE_SCRIPT = """
+import importlib, sys
+from BTrees.OOBTree import OOBTree
+test = importlib.import_module(sys.argv[1])
+Jar, Key, _local = test.Jar, test.Key, test._local
+tree = OOBTree()
+for i in range(300):
+    tree[Key(i)] = i
+Jar().commit(tree)
+separator = tree.__getstate__()[0][3]
+
+def hook():
+    tree._p_invalidate()
+
+_local.hook = hook
+_local.target = separator
+try:
+    del tree[Key(separator.v)]
+except RuntimeError:
+    print('RuntimeError')
+tree._check()
+assert Key(separator.v) not in tree
+assert [k.v for k in tree] == [i for i in range(300) if i != separator.v]
+"""
 
 
 class TestFreeThreading(unittest.TestCase):
@@ -356,3 +422,18 @@ class TestFreeThreading(unittest.TestCase):
             sys.setswitchinterval(switch)
         errors = [(w.prefix, e) for w in workers for e in w.errors]
         self.assertEqual(errors, [])
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'needs glibc')
+    def test_delete_separator_with_poisoned_memory(self):
+        from BTrees.OOBTree import OOBTree
+        if 'Py' in type(OOBTree()).__name__:
+            self.skipTest('needs the C extensions')
+        # Fill freed memory with a pattern, so that a use of the freed
+        # array of the root crashes.
+        env = dict(os.environ, MALLOC_PERTURB_='165',
+                   GLIBC_TUNABLES='glibc.malloc.tcache_count=0')
+        result = subprocess.run(
+            [sys.executable, '-c', _DELETE_SCRIPT, __name__],
+            env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'RuntimeError')
