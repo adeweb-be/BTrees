@@ -8,7 +8,8 @@ A comparison of object keys runs Python code. In some steps, that code
 invalidates the buckets of the tree while a search reads one of them, or
 invalidates the root while a delete compares a key with a separator of
 the root. The operation must then raise RuntimeError or give the correct
-result.
+result. Three more tests invalidate the root during a delete, an insert
+and a value replace, in a new process with freed memory poisoned.
 
 Set BTREES_STRESS_ROUNDS to run more rounds. To make a write into freed
 memory crash, run with MALLOC_PERTURB_=165 and
@@ -54,6 +55,10 @@ class Key:
         if target is not None and other is target:
             # Run the hook in the comparison with the target key.
             _local.target = None
+            _local.hook()
+        if getattr(_local, 'self_target', None) is self:
+            # Run the hook in a comparison of the target key with another.
+            _local.self_target = None
             _local.hook()
         return self.v < other.v
 
@@ -377,29 +382,44 @@ class Worker:
             self.resolve()
 
 
-_DELETE_SCRIPT = """
+_SCRIPT = """
 import importlib, sys
 from BTrees.OOBTree import OOBTree
 test = importlib.import_module(sys.argv[1])
-Jar, Key, _local = test.Jar, test.Key, test._local
+case = sys.argv[2]
+Key, _local = test.Key, test._local
 tree = OOBTree()
-for i in range(300):
+for i in range(0, 600, 2):
     tree[Key(i)] = i
-Jar().commit(tree)
-separator = tree.__getstate__()[0][3]
+test.Jar().commit(tree)
+expected = {i: i for i in range(0, 600, 2)}
+state = tree.__getstate__()
 
 def hook():
     tree._p_invalidate()
 
 _local.hook = hook
-_local.target = separator
 try:
-    del tree[Key(separator.v)]
+    if case == 'delete':
+        # The comparison with the separator invalidates the root.
+        separator = state[0][3]
+        _local.target = separator
+        del expected[separator.v]
+        del tree[Key(separator.v)]
+    else:
+        # The first comparison in a bucket invalidates the root.
+        keys = state[0][4].__getstate__()[0][::2]
+        middle = keys[len(keys) // 2]
+        _local.self_target = middle
+        k = middle.v + 1 if case == 'insert' else middle.v
+        expected[k] = 'new'
+        tree[Key(k)] = 'new'
 except RuntimeError:
     print('RuntimeError')
+else:
+    print('no error')
 tree._check()
-assert Key(separator.v) not in tree
-assert [k.v for k in tree] == [i for i in range(300) if i != separator.v]
+assert {k.v: v for k, v in tree.items()} == expected
 """
 
 
@@ -423,17 +443,32 @@ class TestFreeThreading(unittest.TestCase):
         errors = [(w.prefix, e) for w in workers for e in w.errors]
         self.assertEqual(errors, [])
 
-    @unittest.skipUnless(sys.platform.startswith('linux'), 'needs glibc')
-    def test_delete_separator_with_poisoned_memory(self):
+    def _run_poisoned(self, case):
+        """Run _SCRIPT for a case in a new process, and return its output.
+
+        Freed memory gets a pattern, so that a use of the freed array of
+        the root crashes.
+        """
         from BTrees.OOBTree import OOBTree
+        if not sys.platform.startswith('linux'):
+            self.skipTest('needs glibc')
         if 'Py' in type(OOBTree()).__name__:
             self.skipTest('needs the C extensions')
-        # Fill freed memory with a pattern, so that a use of the freed
-        # array of the root crashes.
         env = dict(os.environ, MALLOC_PERTURB_='165',
                    GLIBC_TUNABLES='glibc.malloc.tcache_count=0')
         result = subprocess.run(
-            [sys.executable, '-c', _DELETE_SCRIPT, __name__],
+            [sys.executable, '-c', _SCRIPT, __name__, case],
             env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), 'RuntimeError')
+        return result.stdout.strip()
+
+    def test_delete_separator_with_poisoned_memory(self):
+        self.assertEqual(self._run_poisoned('delete'), 'RuntimeError')
+
+    def test_insert_with_poisoned_memory(self):
+        # The bucket grows, and the root must not use its freed array.
+        self.assertEqual(self._run_poisoned('insert'), 'RuntimeError')
+
+    def test_replace_with_poisoned_memory(self):
+        # The bucket keeps its size, and the new value is stored.
+        self.assertEqual(self._run_poisoned('replace'), 'no error')
