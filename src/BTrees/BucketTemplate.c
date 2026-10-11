@@ -40,8 +40,11 @@
     int _hi = (SELF)->len;                                  \
     int _i;                                                 \
     int _cmp = 1;                                           \
+    SEARCH_GUARD((SELF)->keys, (SELF)->len)                 \
     for (_i = _hi >> 1; _lo < _hi; _i = (_lo + _hi) >> 1) { \
       TEST_KEY_SET_OR(_cmp, (SELF)->keys[_i], (KEY))        \
+        ONERROR;                                            \
+      SEARCH_CHANGED_OR((SELF)->keys, (SELF)->len)          \
         ONERROR;                                            \
       if      (_cmp < 0)  _lo = _i + 1;                     \
       else if (_cmp == 0) break;                            \

@@ -101,6 +101,32 @@ object_compare(PyObject *lhs, PyObject *rhs)
 }
 #endif
 
+#ifdef KEY_TYPE_IS_PYOBJECT
+/* A comparison of object keys can run Python code. That code can change
+ * the node that a search reads, or make it a ghost. The indexes of the
+ * search are then not valid. SEARCH_GUARD() records the array and the
+ * length of the node. SEARCH_CHANGED_OR() sets RuntimeError and runs the
+ * next statement if one of them changed.
+ */
+static int
+node_changed_error(void)
+{
+    PyErr_SetString(PyExc_RuntimeError,
+                    "the BTree node changed during a comparison");
+    return 1;
+}
+
+#define SEARCH_GUARD(ARRAY, LEN)                            \
+    const void *_guard_array = (const void *)(ARRAY);       \
+    int _guard_len = (LEN);
+#define SEARCH_CHANGED_OR(ARRAY, LEN)                       \
+    if (((const void *)(ARRAY) != _guard_array              \
+         || (LEN) != _guard_len) && node_changed_error())
+#else
+/* A comparison of other keys does not run Python code. */
+#define SEARCH_GUARD(ARRAY, LEN)
+#define SEARCH_CHANGED_OR(ARRAY, LEN) if (0)
+#endif
 
 
 #ifdef NEED_LONG_LONG_SUPPORT
@@ -351,8 +377,11 @@ static PyTypeObject BucketType;
     int _lo = 0;                                            \
     int _hi = (SELF)->len;                                  \
     int _i, _cmp;                                           \
+    SEARCH_GUARD((SELF)->data, (SELF)->len)                 \
     for (_i = _hi >> 1; _i > _lo; _i = (_lo + _hi) >> 1) {  \
         TEST_KEY_SET_OR(_cmp, (SELF)->data[_i].key, (KEY))  \
+            ONERROR;                                        \
+        SEARCH_CHANGED_OR((SELF)->data, (SELF)->len)        \
             ONERROR;                                        \
         if      (_cmp < 0) _lo = _i;                        \
         else if (_cmp > 0) _hi = _i;                        \
