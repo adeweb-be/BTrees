@@ -717,6 +717,9 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
     int self_was_empty; /* was self empty at entry? */
     BTreeItem *data;    /* self->data after the search */
     int len;            /* self->len after the search */
+#ifdef KEY_TYPE_IS_PYOBJECT
+    PyObject *old_key = NULL;   /* separator to release at the end */
+#endif
 
     KEY_TYPE key;
     int copied = 1;
@@ -763,8 +766,7 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
         Sized *child = d->child;
 
         /* The child runs comparisons, and they can run Python code that
-         * changes this node. Keep the child alive, and do not use d if
-         * the node changed.
+         * changes this node. Keep the child alive until it returns.
          */
         Py_INCREF(child);
         if (SameType_Check(self, child))
@@ -774,8 +776,6 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
                                  value, unique, noval, &bucket_changed);
         Py_DECREF(child);
         if (status < 0)
-            goto Error;
-        if ((self->data != data || self->len != len) && node_changed_error())
             goto Error;
 #ifdef PERSISTENT
         /* If a BTree contains only a single bucket, BTree.__getstate__()
@@ -795,6 +795,13 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
     if (status == 0)
         goto Done;
     assert(status == 1 || status == 2);
+
+    /* The child changed size, and the code below uses d. If Python code in
+     * the child changed this node, d is not valid. The code above does not
+     * use d, so a child that kept its size needs no check.
+     */
+    if ((self->data != data || self->len != len) && node_changed_error())
+        goto Error;
 
     /* The child changed size.  Get its new size.  Note that since the tree
     * rooted at the child changed size, so did the tree rooted at self:
@@ -848,9 +855,6 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
         if (_cmp == 0) /* Need to replace key with first key from child */
         {
             Bucket *bucket;
-#ifdef KEY_TYPE_IS_PYOBJECT
-            PyObject *old_key;
-#endif
 
             if (SameType_Check(self, d->child))
             {
@@ -865,17 +869,14 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
             UNLESS(PER_USE(bucket))
                 goto Error;
 #ifdef KEY_TYPE_IS_PYOBJECT
-            /* Release the old key after the store, because the release
-             * can run Python code.
+            /* Release the old key at the end, after the last use of d,
+             * because the release can run Python code.
              */
             old_key = d->key;
 #endif
             COPY_KEY(d->key, bucket->keys[0]);
             INCREF_KEY(d->key);
             PER_UNUSE(bucket);
-#ifdef KEY_TYPE_IS_PYOBJECT
-            Py_DECREF(old_key);
-#endif
             if (PER_CHANGED(self) < 0)
                     goto Error;
         }
@@ -997,6 +998,9 @@ Done:
     }
 #endif
     PER_UNUSE(self);
+#ifdef KEY_TYPE_IS_PYOBJECT
+    Py_XDECREF(old_key);
+#endif
     return status;
 
 Error:
@@ -1009,6 +1013,9 @@ Error:
         _BTree_clear(self);
     }
     PER_UNUSE(self);
+#ifdef KEY_TYPE_IS_PYOBJECT
+    Py_XDECREF(old_key);
+#endif
     return -1;
 }
 
