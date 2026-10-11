@@ -101,12 +101,8 @@ object_compare(PyObject *lhs, PyObject *rhs)
 }
 #endif
 
-#ifdef KEY_TYPE_IS_PYOBJECT
-/* A comparison of object keys can run Python code. That code can change
- * the node that a search reads, or make it a ghost. The indexes of the
- * search are then not valid. SEARCH_GUARD() records the array and the
- * length of the node. SEARCH_CHANGED_OR() sets RuntimeError and runs the
- * next statement if one of them changed.
+/* Set RuntimeError for a node that Python code changed while the C code
+ * held an index or a pointer into it. Return 1.
  */
 static int
 node_changed_error(void)
@@ -116,6 +112,13 @@ node_changed_error(void)
     return 1;
 }
 
+#ifdef KEY_TYPE_IS_PYOBJECT
+/* A comparison of object keys can run Python code. That code can change
+ * the node that a search reads, or make it a ghost. The indexes of the
+ * search are then not valid. SEARCH_GUARD() records the array and the
+ * length of the node. SEARCH_CHANGED_OR() sets RuntimeError and runs the
+ * next statement if one of them changed.
+ */
 #define SEARCH_GUARD(ARRAY, LEN)                            \
     const void *_guard_array = (const void *)(ARRAY);       \
     int _guard_len = (LEN);

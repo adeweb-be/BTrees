@@ -715,6 +715,8 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
     int childlength;    /* len(self->data[min].child) */
     int status;         /* our return value; and return value from callee */
     int self_was_empty; /* was self empty at entry? */
+    BTreeItem *data;    /* self->data after the search */
+    int len;            /* self->len after the search */
 
     KEY_TYPE key;
     int copied = 1;
@@ -748,19 +750,33 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
 
     /* Find the right child to search, and hand the work off to it. */
     BTREE_SEARCH(min, self, key, goto Error);
-    d = self->data + min;
+    data = self->data;
+    len = self->len;
+    d = data + min;
 
 #ifdef PERSISTENT
     PER_READCURRENT(self, goto Error);
 #endif
 
-    if (SameType_Check(self, d->child))
-        status = _BTree_set(BTREE(d->child), keyarg, value, unique, noval);
-    else
     {
         int bucket_changed = 0;
-        status = _bucket_set(BUCKET(d->child), keyarg,
-                            value, unique, noval, &bucket_changed);
+        Sized *child = d->child;
+
+        /* The child runs comparisons, and they can run Python code that
+         * changes this node. Keep the child alive, and do not use d if
+         * the node changed.
+         */
+        Py_INCREF(child);
+        if (SameType_Check(self, child))
+            status = _BTree_set(BTREE(child), keyarg, value, unique, noval);
+        else
+            status = _bucket_set(BUCKET(child), keyarg,
+                                 value, unique, noval, &bucket_changed);
+        Py_DECREF(child);
+        if (status < 0)
+            goto Error;
+        if ((self->data != data || self->len != len) && node_changed_error())
+            goto Error;
 #ifdef PERSISTENT
         /* If a BTree contains only a single bucket, BTree.__getstate__()
         * includes the bucket's entire state, and the bucket doesn't get
@@ -778,8 +794,6 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
     }
     if (status == 0)
         goto Done;
-    if (status < 0)
-        goto Error;
     assert(status == 1 || status == 2);
 
     /* The child changed size.  Get its new size.  Note that since the tree
@@ -828,9 +842,15 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
         */
         int _cmp = 1;
         TEST_KEY_SET_OR(_cmp, key, d->key) goto Error;
+        /* The comparison can run Python code that changes this node. */
+        if ((self->data != data || self->len != len) && node_changed_error())
+            goto Error;
         if (_cmp == 0) /* Need to replace key with first key from child */
         {
             Bucket *bucket;
+#ifdef KEY_TYPE_IS_PYOBJECT
+            PyObject *old_key;
+#endif
 
             if (SameType_Check(self, d->child))
             {
@@ -844,10 +864,18 @@ _BTree_set(BTree *self, PyObject *keyarg, PyObject *value,
 
             UNLESS(PER_USE(bucket))
                 goto Error;
-            DECREF_KEY(d->key);
+#ifdef KEY_TYPE_IS_PYOBJECT
+            /* Release the old key after the store, because the release
+             * can run Python code.
+             */
+            old_key = d->key;
+#endif
             COPY_KEY(d->key, bucket->keys[0]);
             INCREF_KEY(d->key);
             PER_UNUSE(bucket);
+#ifdef KEY_TYPE_IS_PYOBJECT
+            Py_DECREF(old_key);
+#endif
             if (PER_CHANGED(self) < 0)
                     goto Error;
         }
