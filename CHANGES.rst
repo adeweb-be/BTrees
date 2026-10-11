@@ -1,13 +1,24 @@
 Change log
 ==========
 
-6.6 (unreleased)
-----------------
+6.5+zoe.1 (unreleased)
+----------------------
 
 - Declare free-threading support in the C extensions, so that importing them
   on CPython 3.14t no longer enables the GIL. The ``Set`` ``repr`` no longer
   uses a lazily created format string, and the internal items and iterator
   types are now readied at module init.
+
+- Hold a reference to both operands of an object key or value comparison.
+  A comparison can run Python code that removes the key from its bucket.
+
+- For object keys, a search in a bucket or a BTree node raises
+  ``RuntimeError`` if a key comparison changes the node, for example with
+  ``_p_invalidate()``. Before, the search read freed memory. A BTree object
+  is still meant for one thread at a time.
+
+- Add a stress test with many threads and one tree for each thread: inserts,
+  deletes, range scans, ghostification and conflict resolution.
 
 
 6.5 (2026-08-20)
