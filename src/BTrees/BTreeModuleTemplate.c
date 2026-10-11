@@ -71,6 +71,37 @@ static void PyVar_Assign(PyObject **v, PyObject *e) { Py_XDECREF(*v); *v=e;}
 #define ASSERT(C, S, R) if (! (C)) { \
   PyErr_SetString(PyExc_AssertionError, (S)); return (R); }
 
+#if defined(KEY_TYPE_IS_PYOBJECT) || defined(VALUE_TYPE_IS_PYOBJECT)
+/* Compare two objects. None is smaller than all other objects.
+ * Return -1, 0 or 1. On error, return -1 or 1 with an exception set,
+ * and the caller checks PyErr_Occurred().
+ * The comparison can run Python code, and that code can remove an
+ * operand from its node. Thus keep a reference to each operand.
+ */
+static int
+object_compare(PyObject *lhs, PyObject *rhs)
+{
+    int result;
+
+    if (lhs == Py_None)
+        return rhs == Py_None ? 0 : -1;
+    if (rhs == Py_None)
+        return 1;
+
+    Py_INCREF(lhs);
+    Py_INCREF(rhs);
+    result = PyObject_RichCompareBool(lhs, rhs, Py_LT);
+    if (result != 0)
+        result = -1;
+    else
+        result = PyObject_RichCompareBool(lhs, rhs, Py_EQ) > 0 ? 0 : 1;
+    Py_DECREF(rhs);
+    Py_DECREF(lhs);
+    return result;
+}
+#endif
+
+
 
 #ifdef NEED_LONG_LONG_SUPPORT
 /* Helper code used to support long long instead of int. */

@@ -1,14 +1,7 @@
 #define VALUEMACROS_H "$Id$\n"
 
-/* Note that the second comparison is skipped if the first comparison returns:
-
-   1  -> There was no error and the answer is -1
-  -1 -> There was an error, which the caller will detect with PyError_Occurred.
- */
-#define COMPARE(lhs, rhs) \
-  (lhs == Py_None ? (rhs == Py_None ? 0 : -1) : (rhs == Py_None ? 1 : \
-     (PyObject_RichCompareBool((lhs), (rhs), Py_LT) != 0 ? -1 : \
-      (PyObject_RichCompareBool((lhs), (rhs), Py_EQ) > 0 ? 0 : 1))))
+/* object_compare() is in BTreeModuleTemplate.c. */
+#define COMPARE(lhs, rhs) object_compare((lhs), (rhs))
 
 #define VALUE_TYPE PyObject *
 #define VALUE_TYPE_IS_PYOBJECT
