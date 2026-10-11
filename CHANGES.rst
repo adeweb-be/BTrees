@@ -1,16 +1,17 @@
 Change log
 ==========
 
-6.5+zoe.2 (unreleased)
+6.5+zoe.3 (unreleased)
 ----------------------
 
-- A delete raises ``RuntimeError`` if a key comparison or the child changes
-  the BTree node that holds the separator, for example with
-  ``_p_invalidate()``. Before, the update of the separator wrote into the
-  freed array of the node.
+- An insert or a delete raises ``RuntimeError`` if Python code in a key
+  comparison changes a BTree node while the node grows or shrinks one of
+  its children, for example with ``_p_invalidate()``. A value replace, which
+  does not change the size of the child, stores the new value with no error.
+  Before, the node wrote into its freed array.
 
-- Add the delete of a separator key to the stress test, and a test that
-  runs it with freed memory poisoned.
+- Add the delete of a separator key to the stress test, and tests that run
+  a delete, an insert and a value replace with freed memory poisoned.
 
 
 6.5+zoe.1 (unreleased)
